@@ -455,10 +455,13 @@ def alerts():
 <div class="meta">A watcher scans local listings for high-value antiques and sends a push notification to your phone when a deal worth your time pops up. No price cap - if it's a real find, you'll hear about it.</div></div>
 <div class="card"><h3>Step 1 - install ntfy</h3>
 <div class="meta">Install the <b>ntfy</b> app (free) from the App Store or Google Play.</div></div>
-<div class="card"><h3>Step 2 - subscribe</h3>
-<div class="meta">In ntfy tap <b>+</b> and subscribe to this topic:<br><br>
+<div class="card"><h3>Step 2 - add our server</h3>
+<div class="meta">In ntfy, open settings and <b>add a new server</b> with this address:<br><br>
+<b style="font-size:16px;color:#7c4a1e">https://thrift-ntfy.onrender.com</b></div></div>
+<div class="card"><h3>Step 3 - subscribe</h3>
+<div class="meta">Tap <b>+</b> and subscribe to this topic on the new server:<br><br>
 <b style="font-size:16px;color:#7c4a1e">""" + NTFY_TOPIC + """</b></div></div>
-<div class="card"><h3>Step 3 - that's it</h3>
+<div class="card"><h3>Step 4 - that's it</h3>
 <div class="meta">Deal alerts land as high-priority notifications on your phone. Happy hunting.</div></div>
 """, "")
 
