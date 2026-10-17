@@ -1,10 +1,12 @@
 """Aldi provider — live prices via Playwright scraping of aldi.us."""
 from .base import BaseProvider
 from .engine import q
+from .stores import STORES
 
 STORE_NAME = "Aldi"
 PROVIDER_STATUS = {"status": "blocked",
-                   "note": "Aldi blocks automated price checks. Ask Muse in chat for a live check."}
+                   "note": "Aldi blocks automated price checks. Ask Muse in chat for a live check.",
+                   "address": STORES["Aldi"]["address"]}
 
 SEARCH_URL_TMPL = "https://www.aldi.us/store/aldi/s?k=%s"
 

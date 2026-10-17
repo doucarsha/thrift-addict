@@ -1,10 +1,12 @@
 """Walmart provider — live prices via Playwright scraping of walmart.com."""
 from .base import BaseProvider
 from .engine import q
+from .stores import STORES
 
 STORE_NAME = "Walmart"
 PROVIDER_STATUS = {"status": "blocked",
-                   "note": "Walmart blocks automated price checks. Ask Muse in chat for a live check."}
+                   "note": "Walmart blocks automated price checks. Ask Muse in chat for a live check.",
+                   "address": STORES["Walmart"]["address"]}
 
 SEARCH_URL_TMPL = "https://www.walmart.com/search?q=%s"
 

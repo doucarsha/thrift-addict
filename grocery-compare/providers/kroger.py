@@ -15,8 +15,11 @@ import urllib.parse
 import urllib.request
 
 from .base import BaseProvider
+from .stores import STORES
 
 STORE_NAME = "Kroger"
+# Shaun's store: Kroger Hilliard-Rome. Override with KROGER_LOCATION_ID env var.
+PREFERRED_LOCATION_ID = os.environ.get("KROGER_LOCATION_ID") or STORES["Kroger"]["location_id"]
 
 TOKEN_URL = "https://api.kroger.com/v1/connect/oauth2/token"
 PRODUCTS_URL = "https://api.kroger.com/v1/products"
@@ -72,7 +75,9 @@ def _api_get(url, params):
 
 
 def _find_location_id(zip_code):
-    """Kroger location ID nearest the ZIP (cached in-memory)."""
+    """Preferred Hilliard-Rome store; falls back to nearest-ZIP lookup."""
+    if PREFERRED_LOCATION_ID:
+        return PREFERRED_LOCATION_ID
     if not hasattr(_find_location_id, "cache"):
         _find_location_id.cache = {}
     if zip_code in _find_location_id.cache:
@@ -136,7 +141,8 @@ def _api_search(item, zip_code):
 
 PROVIDER_STATUS = {"status": "live" if _creds()[0] else "stub",
                    "note": ("Live via Kroger official API." if _creds()[0]
-                            else "Needs free Kroger API key — see setup.")}
+                            else "Needs free Kroger API key — see setup."),
+                   "address": STORES["Kroger"]["address"]}
 
 
 class KrogerProvider(BaseProvider):

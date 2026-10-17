@@ -1,10 +1,12 @@
 """Meijer provider — live prices via Playwright scraping of meijer.com."""
 from .base import BaseProvider
 from .engine import q
+from .stores import STORES
 
 STORE_NAME = "Meijer"
 PROVIDER_STATUS = {"status": "blocked",
-                   "note": "Meijer blocks automated price checks. Ask Muse in chat for a live check."}
+                   "note": "Meijer blocks automated price checks. Ask Muse in chat for a live check.",
+                   "address": STORES["Meijer"]["address"]}
 
 SEARCH_URL_TMPL = "https://www.meijer.com/shopping/search/%s"
 

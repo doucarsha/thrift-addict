@@ -341,6 +341,7 @@ PAGE = """<!DOCTYPE html>
   .badge.win { background:var(--green); color:#fff; }
   .badge.sale { background:var(--red); color:#fff; margin-left:6px; }
   .badge.stub { background:#eef0f2; color:var(--mut); }
+  .addr { font-size:11px; color:var(--mut); margin-top:2px; }
   .badge.live { background:#dbeafe; color:#1d4ed8; }
   .badge.blocked { background:#fee2e2; color:#991b1b; }
   .price { font-weight:700; font-size:16px; white-space:nowrap; }
@@ -460,8 +461,10 @@ function resultRows(results, winner) {
   let h = `<table><tr><th>Store</th><th>Item</th><th>Price</th></tr>`;
   for (const r of results) {
     const isW = (r.store + "|" + r.name) === wkey;
+    const st = statuses.find(x => x.store === r.store);
+    const addr = st && st.address ? `<div class="addr">${esc(st.address)}</div>` : "";
     h += `<tr class="${isW ? "winner" : ""}">`;
-    h += `<td><b>${esc(r.store)}</b>${isW ? ' <span class="badge win">cheapest</span>' : ""}${r.sale ? ' <span class="badge sale">sale</span>' : ""}</td>`;
+    h += `<td><b>${esc(r.store)}</b>${addr}${isW ? ' <span class="badge win">cheapest</span>' : ""}${r.sale ? ' <span class="badge sale">sale</span>' : ""}</td>`;
     h += `<td>${esc(r.name)}${r.unit_price ? `<div class="unit">${esc(r.unit_price)}</div>` : ""}`
       + (r.url ? `<div><a class="prod" href="${esc(r.url)}" target="_blank" rel="noopener">view product &nearr;</a></div>` : "") + `</td>`;
     h += `<td class="price">${money(r.price)}</td></tr>`;
@@ -593,7 +596,9 @@ async function loadSales() {
     const done = await pollJob(j.job_id);
     let h = "";
     for (const [store, items] of Object.entries(done.sales)) {
-      h += `<div class="card"><div class="storename">${esc(store)}${statusBadge(store)}</div>`;
+      const st = statuses.find(x => x.store === store);
+      const addr = st && st.address ? `<div class="addr">${esc(st.address)}</div>` : "";
+      h += `<div class="card"><div class="storename">${esc(store)}${statusBadge(store)}${addr}</div>`;
       if (!items.length) {
         h += `<div class="empty">No sale data yet &mdash; this provider is still being connected.</div>`;
       } else {
