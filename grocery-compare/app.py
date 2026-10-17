@@ -62,6 +62,27 @@ def healthz():
     return "ok", 200
 
 
+@app.route("/api/debug")
+def api_debug():
+    info = {}
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith(("MemTotal:", "MemAvailable:")):
+                    k, v = line.split(":")
+                    info[k.strip()] = v.strip()
+    except Exception as e:
+        info["mem_error"] = str(e)
+    try:
+        from providers import engine as _eng
+        info["browser_started"] = _eng._browser is not None
+    except Exception as e:
+        info["browser_error"] = str(e)[:100]
+    with JOBS_LOCK:
+        info["jobs"] = len(JOBS)
+    return jsonify(info)
+
+
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 

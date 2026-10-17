@@ -19,8 +19,8 @@ from playwright.async_api import async_playwright
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-STORE_TIMEOUT_S = 45
-MAX_CONCURRENT = 2
+STORE_TIMEOUT_S = 40
+MAX_CONCURRENT = 1  # sequential: 512MB free tier can't hold 2 heavy pages
 CACHE_TTL_S = 24 * 3600
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -42,7 +42,11 @@ async def _ensure():
         _pw = await async_playwright().start()
         kwargs = {"headless": True,
                   "args": ["--disable-dev-shm-usage", "--no-sandbox",
-                           "--disable-gpu"]}
+                           "--disable-gpu", "--no-zygote", "--single-process",
+                           "--disable-extensions",
+                           "--disable-background-networking",
+                           "--disable-background-timer-throttling",
+                           "--disable-renderer-backgrounding"]}
         proxy = _proxy_cfg()
         if proxy:
             kwargs["proxy"] = proxy
