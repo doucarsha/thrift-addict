@@ -1,15 +1,16 @@
 """Meijer provider — live prices via Playwright scraping of meijer.com."""
 from .base import BaseProvider
 from .engine import q
-from .aldi import _parse_cards
 
 STORE_NAME = "Meijer"
 PROVIDER_STATUS = {"status": "live",
                    "note": "Live prices from meijer.com search."}
 
+SEARCH_URL_TMPL = "https://www.meijer.com/shopping/search/%s"
+
 
 def search_url(item, zip_code):
-    return "https://www.meijer.com/shopping/search/%s" % q(item)
+    return SEARCH_URL_TMPL % q(item)
 
 
 def sales_url(zip_code):
@@ -17,12 +18,30 @@ def sales_url(zip_code):
 
 
 async def parse_results(page, url):
-    return await _parse_cards(
-        page, url,
-        card_sel="[data-testid='product-card'], [class*='product-tile'], [class*='product-card']",
-        name_sel="[class*='product-title'], [class*='product-name'], h3",
-        price_sel="[class*='price'], [data-testid='price']",
-    )
+    rows = await page.evaluate("""() => {
+      const cards = [...document.querySelectorAll('main article')];
+      const out = [];
+      for (const card of cards.slice(0, 10)) {
+        const h3 = card.querySelector('h3');
+        const name = h3 ? h3.innerText.trim().replace(/\\s+/g, ' ') : '';
+        const pel = card.querySelector(
+          '[aria-label="Product pricing information"]');
+        const txt = ((pel ? pel.innerText : '') || card.innerText) || '';
+        const m = txt.match(/\\$(\\d+\\.\\d{2})/);
+        const a = card.querySelector('a[href^="/shopping/product/"]');
+        const href = a ? a.getAttribute('href') : '';
+        if (name && m) {
+          out.push({name: name.slice(0, 120),
+                    price: parseFloat(m[1]),
+                    sale: /Original price:|Save \\$/i.test(txt),
+                    url: href ? 'https://www.meijer.com' + href : null});
+        }
+      }
+      return out;
+    }""")
+    return [{"store": STORE_NAME, "name": r["name"], "price": r["price"],
+             "unit_price": None, "sale": r["sale"], "url": r["url"] or url}
+            for r in rows]
 
 
 async def parse_sales(page):
