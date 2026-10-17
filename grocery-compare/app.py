@@ -358,6 +358,11 @@ PAGE = """<!DOCTYPE html>
   .spin { text-align:center; color:var(--mut); padding:16px; }
   .err { background:#fee2e2; color:#991b1b; border-radius:10px; padding:10px; margin-top:10px; font-size:14px; }
   .hint { font-size:13px; color:var(--mut); margin-top:8px; }
+  .badge.pb { background:#fef3c7; color:#92400e; }
+  select { width:100%; padding:11px; font-size:16px; border:1px solid var(--line);
+           border-radius:10px; background:#fff; }
+  .pbgrid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .pbgrid .full { grid-column:1 / -1; }
 </style>
 </head>
 <body>
@@ -374,6 +379,7 @@ PAGE = """<!DOCTYPE html>
   <button class="active" data-tab="search">&#x1F50D; Search</button>
   <button data-tab="list">&#x1F6D2; My List</button>
   <button data-tab="sales">&#x1F3F7;&#xFE0F; Sales</button>
+  <button data-tab="pricebook">&#x1F4D3; Price Book</button>
 </nav>
 <main>
   <section class="tab active" id="tab-search">
@@ -382,7 +388,7 @@ PAGE = """<!DOCTYPE html>
         <input type="text" id="q" placeholder="e.g. whole milk gallon" enterkeyhint="search">
         <button class="go" id="searchBtn">Go</button>
       </div>
-      <div class="hint">Compares the item across all four stores on demand.</div>
+      <div class="hint">Live Kroger prices plus your saved price-book entries for all four stores.</div>
     </div>
     <div id="searchOut"></div>
   </section>
@@ -416,6 +422,32 @@ PAGE = """<!DOCTYPE html>
       <div class="hint" style="margin-top:4px">The best deals worth your time at each store.</div>
     </div>
     <div id="salesOut"><div class="spin">Loading&hellip;</div></div>
+  </section>
+
+  <section class="tab" id="tab-pricebook">
+    <div class="card">
+      <b>Log a shelf price</b>
+      <div class="hint" style="margin:4px 0 10px">Enter prices you see in the store. They show up in Search and List comparisons tagged "my price", and the cheapest wins. Saved on this device.</div>
+      <div class="pbgrid">
+        <input type="text" id="pbItem" placeholder="Item, e.g. whole milk" class="full" enterkeyhint="next">
+        <select id="pbStore">
+          <option value="Aldi">Aldi</option>
+          <option value="Kroger">Kroger</option>
+          <option value="Meijer">Meijer</option>
+          <option value="Walmart">Walmart</option>
+        </select>
+        <input type="text" id="pbPrice" inputmode="decimal" placeholder="Price, e.g. 2.71">
+        <input type="text" id="pbUnit" placeholder="Size, e.g. gallon (optional)" class="full">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="go" id="pbAdd" style="margin-left:auto">Save price</button>
+      </div>
+      <div id="pbMsg"></div>
+    </div>
+    <div class="card">
+      <b>Saved prices</b>
+      <ul class="picklist" id="pbList"></ul>
+    </div>
   </section>
 </main>
 
@@ -451,6 +483,7 @@ document.querySelectorAll("nav.tabs button").forEach(b => {
     b.classList.add("active");
     $("tab-" + b.dataset.tab).classList.add("active");
     if (b.dataset.tab === "sales") loadSales();
+    if (b.dataset.tab === "pricebook") renderPriceBook();
   });
 });
 
@@ -464,8 +497,9 @@ function resultRows(results, winner) {
     const st = statuses.find(x => x.store === r.store);
     const addr = st && st.address ? `<div class="addr">${esc(st.address)}</div>` : "";
     h += `<tr class="${isW ? "winner" : ""}">`;
-    h += `<td><b>${esc(r.store)}</b>${addr}${isW ? ' <span class="badge win">cheapest</span>' : ""}${r.sale ? ' <span class="badge sale">sale</span>' : ""}</td>`;
+    h += `<td><b>${esc(r.store)}</b>${addr}${isW ? ' <span class="badge win">cheapest</span>' : ""}${r.sale ? ' <span class="badge sale">sale</span>' : ""}${r.pb ? ' <span class="badge pb">my price</span>' : ""}</td>`;
     h += `<td>${esc(r.name)}${r.unit_price ? `<div class="unit">${esc(r.unit_price)}</div>` : ""}`
+      + (r.pb && r.logged ? `<div class="unit">logged ${esc(r.logged)}</div>` : "")
       + (r.url ? `<div><a class="prod" href="${esc(r.url)}" target="_blank" rel="noopener">view product &nearr;</a></div>` : "") + `</td>`;
     h += `<td class="price">${money(r.price)}</td></tr>`;
   }
@@ -486,9 +520,14 @@ async function doSearch() {
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || "Search failed");
     const done = await pollJob(j.job_id);
+    const pb = pbMatches(q);
+    const results = done.results.concat(pb);
+    const winner = pbWinner(results);
+    const pbNote = pb.length
+      ? `<div class="hint">${pb.length} price${pb.length > 1 ? "s" : ""} from your price book included.</div>` : "";
     $("searchOut").innerHTML =
       `<div class="card"><div class="storename">${esc(done.item)}</div>`
-      + resultRows(done.results, done.winner) + checkedLine(done.checked_at, done.zip) + `</div>`;
+      + resultRows(results, winner) + pbNote + checkedLine(done.checked_at, done.zip) + `</div>`;
   } catch (e) {
     $("searchOut").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
@@ -558,21 +597,30 @@ async function compareList() {
     if (!r.ok) throw new Error(j.error || "Compare failed");
     const done = await pollJobProgress(j.job_id);
     let h = "";
+    const winners = [];
     for (const it of done.items) {
+      const pb = pbMatches(it.item);
+      const results = it.results.concat(pb);
+      const winner = pbWinner(results);
+      winners.push(winner);
       h += `<div class="card"><div class="storename">${esc(it.item)}`
-        + (it.winner ? ` <span class="badge win">${esc(it.winner.store)} ${money(it.winner.price)}</span>` : "") + `</div>`
-        + resultRows(it.results, it.winner) + `</div>`;
+        + (winner ? ` <span class="badge win">${esc(winner.store)} ${money(winner.price)}</span>` : "") + `</div>`
+        + resultRows(results, winner) + `</div>`;
     }
-    const stores = Object.keys(done.totals);
+    const totals = {};
+    for (const w of winners) {
+      if (w) totals[w.store] = (totals[w.store] || 0) + w.price;
+    }
+    const stores = Object.keys(totals);
     if (stores.length) {
-      const best = stores.reduce((a, b) => done.totals[a] <= done.totals[b] ? a : b);
+      const best = stores.reduce((a, b) => totals[a] <= totals[b] ? a : b);
       h += `<div class="card"><div class="storename">Estimated basket totals</div>`
         + `<table class="totals"><tr><th>Store</th><th>Winner items</th></tr>`
-        + stores.sort((a, b) => done.totals[a] - done.totals[b]).map(s =>
+        + stores.sort((a, b) => totals[a] - totals[b]).map(s =>
             `<tr class="${s === best ? "winner" : ""}"><td><b>${esc(s)}</b>`
             + (s === best ? ' <span class="badge win">cheapest basket</span>' : "")
-            + `</td><td>${money(done.totals[s])}</td></tr>`).join("")
-        + `</table><div class="hint">Totals add up each item's cheapest price at that store. Items with no price found are skipped.</div></div>`;
+            + `</td><td>${money(totals[s])}</td></tr>`).join("")
+        + `</table><div class="hint">Totals add up each item's cheapest price at that store, including your price-book entries. Items with no price found are skipped.</div></div>`;
     } else {
       h += `<div class="card"><div class="empty">No prices found for any item yet &mdash; provider integrations are still being connected.</div></div>`;
     }
@@ -615,6 +663,60 @@ async function loadSales() {
     $("salesOut").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
 }
+
+/* ---------------- price book ---------------- */
+const PB_KEY = "gc_pricebook_v1";
+function pbLoad() {
+  try { const a = JSON.parse(localStorage.getItem(PB_KEY)); return Array.isArray(a) ? a : []; }
+  catch (e) { return []; }
+}
+function pbSave(a) { try { localStorage.setItem(PB_KEY, JSON.stringify(a)); } catch (e) {} }
+function pbMatches(query) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return [];
+  return pbLoad()
+    .filter(e => { const it = (e.item || "").toLowerCase(); return it && (it.includes(q) || q.includes(it)); })
+    .map(e => ({store: e.store, name: e.item, price: e.price, unit_price: e.unit || "",
+                url: null, sale: false, pb: true,
+                logged: new Date(e.ts).toLocaleDateString()}));
+}
+function pbWinner(results) {
+  const priced = results.filter(r => typeof r.price === "number");
+  return priced.length ? priced.reduce((a, b) => (b.price < a.price ? b : a)) : null;
+}
+function renderPriceBook() {
+  const a = pbLoad().sort((x, y) => y.ts - x.ts);
+  const ul = $("pbList");
+  ul.innerHTML = a.length ? a.map(e =>
+    `<li><span><b>${esc(e.store)}</b> &middot; ${esc(e.item)}`
+    + (e.unit ? ` <span class="unit">${esc(e.unit)}</span>` : "")
+    + `<div class="unit">logged ${esc(new Date(e.ts).toLocaleDateString())}</div></span>`
+    + `<span style="display:flex;align-items:center;gap:10px"><span class="price">${money(e.price)}</span>`
+    + `<button data-id="${e.id}" aria-label="delete">&times;</button></span></li>`).join("")
+    : `<li style="color:var(--mut)">No saved prices yet &mdash; log them while you shop.</li>`;
+  ul.querySelectorAll("button").forEach(b => b.addEventListener("click", () => {
+    pbSave(pbLoad().filter(e => String(e.id) !== b.dataset.id));
+    renderPriceBook();
+  }));
+}
+$("pbAdd").addEventListener("click", () => {
+  const item = $("pbItem").value.trim();
+  const store = $("pbStore").value;
+  const price = parseFloat(($("pbPrice").value.trim() || "").replace("$", ""));
+  const unit = $("pbUnit").value.trim();
+  const msg = $("pbMsg");
+  if (!item || !(price > 0)) {
+    msg.innerHTML = `<div class="err">Enter an item name and a valid price.</div>`;
+    return;
+  }
+  const a = pbLoad();
+  a.push({id: Date.now().toString(36), item, store,
+          price: Math.round(price * 100) / 100, unit, ts: Date.now()});
+  pbSave(a);
+  $("pbItem").value = ""; $("pbPrice").value = ""; $("pbUnit").value = "";
+  msg.innerHTML = `<div class="hint">Saved: ${esc(store)} &middot; ${esc(item)} &middot; ${money(price)}.</div>`;
+  renderPriceBook();
+});
 
 loadStatus();
 renderList();
