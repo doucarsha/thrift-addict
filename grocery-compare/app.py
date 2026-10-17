@@ -62,6 +62,23 @@ def healthz():
     return "ok", 200
 
 
+@app.route("/api/test-aldi")
+def api_test_aldi():
+    """Diagnostic: scrape ONLY Aldi for 'milk' to isolate site vs infra."""
+    import time
+    t0 = time.time()
+    try:
+        from providers import aldi
+        by_store = engine.run(engine.search_all("milk", "43228", [aldi]))
+        res, err = by_store.get("Aldi", ([], None))
+        return jsonify({"ok": True, "elapsed": round(time.time() - t0, 1),
+                        "count": len(res), "error": err,
+                        "sample": res[:3]})
+    except Exception as e:
+        return jsonify({"ok": False, "elapsed": round(time.time() - t0, 1),
+                        "error": str(e)[:300]})
+
+
 @app.route("/api/debug")
 def api_debug():
     info = {}
@@ -77,6 +94,15 @@ def api_debug():
     info["https_proxy_set"] = bool(_os.environ.get("HTTPS_PROXY")
                                    or _os.environ.get("https_proxy"))
     info["grocery_proxy_set"] = bool(_os.environ.get("GROCERY_PROXY"))
+    try:
+        with open("/sys/fs/cgroup/memory.max") as f:
+            info["cgroup_max"] = f.read().strip()
+    except Exception:
+        try:
+            with open("/sys/fs/cgroup/memory/memory.limit_in_bytes") as f:
+                info["cgroup_max"] = f.read().strip()
+        except Exception as e:
+            info["cgroup_max"] = "unknown: %s" % e
     try:
         from providers import engine as _eng
         info["browser_started"] = _eng._browser is not None
