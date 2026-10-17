@@ -64,16 +64,43 @@ def healthz():
 
 @app.route("/api/test-aldi")
 def api_test_aldi():
-    """Diagnostic: scrape ONLY Aldi for 'milk' to isolate site vs infra."""
+    """Diagnostic: load Aldi search, report what the page looks like."""
     import time
     t0 = time.time()
     try:
-        from providers import aldi
-        by_store = engine.run(engine.search_all("milk", "43228", [aldi]))
-        res, err = by_store.get("Aldi", ([], None))
-        return jsonify({"ok": True, "elapsed": round(time.time() - t0, 1),
-                        "count": len(res), "error": err,
-                        "sample": res[:3]})
+        from providers import engine as _eng
+
+        async def probe():
+            browser, sem = await _eng._ensure()
+            async with sem:
+                page, ctx = await _eng._new_page(browser)
+                try:
+                    await page.goto(
+                        "https://www.aldi.us/store/aldi/s?k=milk",
+                        wait_until="domcontentloaded", timeout=40000)
+                    await page.wait_for_timeout(8000)
+                    title = await page.title()
+                    url = page.url
+                    cards = await page.query_selector_all(
+                        'main div[role="group"]')
+                    h3s = await page.query_selector_all(
+                        'main div[role="group"] h3')
+                    body_len = len(await page.content())
+                    first_h3 = (await h3s[0].inner_text()).strip()[:80] \
+                        if h3s else None
+                    return {"title": title[:100], "url": url[:120],
+                            "cards": len(cards), "h3s": len(h3s),
+                            "html_bytes": body_len, "first_h3": first_h3}
+                finally:
+                    try:
+                        await ctx.close()
+                    except Exception:
+                        pass
+
+        info = _eng.run(probe())
+        info["elapsed"] = round(time.time() - t0, 1)
+        info["ok"] = True
+        return jsonify(info)
     except Exception as e:
         return jsonify({"ok": False, "elapsed": round(time.time() - t0, 1),
                         "error": str(e)[:300]})
