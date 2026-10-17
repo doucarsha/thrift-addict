@@ -52,6 +52,11 @@ def utc_now_iso():
 
 # ------------------------------------------------------------------ API ---
 
+@app.route("/healthz")
+def healthz():
+    return "ok", 200
+
+
 @app.route("/api/status")
 def api_status():
     return jsonify({"statuses": provider_statuses(),
