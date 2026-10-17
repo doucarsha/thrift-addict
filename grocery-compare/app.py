@@ -64,7 +64,7 @@ def healthz():
 
 @app.route("/api/test-aldi")
 def api_test_aldi():
-    """Diagnostic: load Aldi search, report what the page looks like."""
+    """Diagnostic: explore Aldi's actual DOM structure."""
     import time
     t0 = time.time()
     try:
@@ -79,18 +79,24 @@ def api_test_aldi():
                         "https://www.aldi.us/store/aldi/s?k=milk",
                         wait_until="domcontentloaded", timeout=40000)
                     await page.wait_for_timeout(8000)
-                    title = await page.title()
-                    url = page.url
-                    cards = await page.query_selector_all(
-                        'main div[role="group"]')
-                    h3s = await page.query_selector_all(
-                        'main div[role="group"] h3')
-                    body_len = len(await page.content())
-                    first_h3 = (await h3s[0].inner_text()).strip()[:80] \
-                        if h3s else None
-                    return {"title": title[:100], "url": url[:120],
-                            "cards": len(cards), "h3s": len(h3s),
-                            "html_bytes": body_len, "first_h3": first_h3}
+                    info = await page.evaluate("""() => {
+                      const main = document.querySelector('main');
+                      const mains = [...document.querySelectorAll('main')].length;
+                      const h3all = [...document.querySelectorAll('h3')]
+                        .slice(0, 5).map(e => e.innerText.trim().slice(0,60));
+                      const btns = [...document.querySelectorAll('button')]
+                        .slice(0, 5).map(e => e.innerText.trim().slice(0,60));
+                      // what repeating structures exist in main?
+                      const kids = main
+                        ? [...main.querySelectorAll('div')].slice(0,3).map(
+                            d => (d.getAttribute('role')||'')
+                              + '|' + (d.className||'').toString().slice(0,60))
+                        : [];
+                      const bodyTxt = document.body.innerText.slice(0, 400);
+                      return {mains, h3all, btns, kids, bodyTxt};
+                    }""")
+                    info["url"] = page.url[:120]
+                    return info
                 finally:
                     try:
                         await ctx.close()
