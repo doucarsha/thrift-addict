@@ -3,8 +3,8 @@ from .base import BaseProvider
 from .engine import q
 
 STORE_NAME = "Walmart"
-PROVIDER_STATUS = {"status": "live",
-                   "note": "Live prices from walmart.com search."}
+PROVIDER_STATUS = {"status": "blocked",
+                   "note": "Walmart blocks automated price checks. Ask Muse in chat for a live check."}
 
 SEARCH_URL_TMPL = "https://www.walmart.com/search?q=%s"
 
@@ -19,37 +19,9 @@ def sales_url(zip_code):
 
 
 async def parse_results(page, url):
-    # Infinite scroll: load a couple more batches of tiles.
-    for _ in range(2):
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await page.wait_for_timeout(2500)
-    rows = await page.evaluate("""() => {
-      const links = [...document.querySelectorAll('main a[href^="/ip/"]')];
-      const seen = new Set();
-      const out = [];
-      for (const a of links) {
-        const href = a.getAttribute('href');
-        if (!href || seen.has(href)) continue;
-        seen.add(href);
-        const h3 = a.querySelector('h3');
-        const name = h3 ? h3.innerText.trim().replace(/\\s+/g, ' ') : '';
-        const tile = a.closest('div');
-        const txt = ((tile ? tile.innerText : '') || a.innerText) || '';
-        const m = txt.match(/(?:current price|Price)\\s*\\$(\\d+\\.\\d{2})/i)
-               || txt.match(/\\$(\\d+\\.\\d{2})/);
-        if (name && m) {
-          out.push({name: name.slice(0, 120),
-                    price: parseFloat(m[1]),
-                    sale: /Rollback/i.test(txt),
-                    url: 'https://www.walmart.com' + href.split('?')[0]});
-        }
-        if (out.length >= 12) break;
-      }
-      return out;
-    }""")
-    return [{"store": STORE_NAME, "name": r["name"], "price": r["price"],
-             "unit_price": None, "sale": r["sale"], "url": r["url"]}
-            for r in rows]
+    # Browser scraping disabled: stores block cloud-server IPs.
+    # Prices refresh via scheduled checks — see README.
+    return []
 
 
 async def parse_sales(page):

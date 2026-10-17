@@ -107,6 +107,16 @@ def cache_set(key, value):
 
 async def _scrape_one(provider_mod, item, zip_code, sales_mode=False):
     """Run one provider's scrape. Returns (results, error_note)."""
+    # Providers with a real API (e.g. Kroger) skip the browser entirely.
+    api_fn = getattr(provider_mod, "api_search", None)
+    if api_fn and not sales_mode:
+        try:
+            results = await asyncio.get_event_loop().run_in_executor(
+                None, api_fn, item, zip_code)
+            return results or [], None
+        except Exception as e:
+            return [], "api failed: %s" % str(e)[:120]
+
     cache_key = "sales:%s:%s" % (provider_mod.STORE_NAME, zip_code) \
         if sales_mode else "search:%s:%s:%s" % (
             provider_mod.STORE_NAME, item.lower().strip(), zip_code)

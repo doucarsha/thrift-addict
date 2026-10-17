@@ -3,8 +3,8 @@ from .base import BaseProvider
 from .engine import q
 
 STORE_NAME = "Aldi"
-PROVIDER_STATUS = {"status": "live",
-                   "note": "Live prices from aldi.us search."}
+PROVIDER_STATUS = {"status": "blocked",
+                   "note": "Aldi blocks automated price checks. Ask Muse in chat for a live check."}
 
 SEARCH_URL_TMPL = "https://www.aldi.us/store/aldi/s?k=%s"
 
@@ -18,27 +18,9 @@ def sales_url(zip_code):
 
 
 async def parse_results(page, url):
-    rows = await page.evaluate("""() => {
-      const cards = [...document.querySelectorAll('main div[role="group"]')];
-      const out = [];
-      for (const card of cards.slice(0, 10)) {
-        const h3 = card.querySelector('h3');
-        const name = h3 ? h3.innerText.trim().replace(/\\s+/g, ' ') : '';
-        const btn = card.querySelector('button');
-        const txt = (btn ? btn.innerText : card.innerText) || '';
-        const cur = txt.match(/Current price:\\s*\\$([\\d.]+)/);
-        const orig = txt.match(/Original Price:\\s*\\$([\\d.]+)/);
-        if (name && cur) {
-          out.push({name: name.slice(0, 120),
-                    price: parseFloat(cur[1]),
-                    sale: /% off/i.test(txt) || !!orig});
-        }
-      }
-      return out;
-    }""")
-    return [{"store": STORE_NAME, "name": r["name"], "price": r["price"],
-             "unit_price": None, "sale": r["sale"], "url": url}
-            for r in rows]
+    # Browser scraping disabled: stores block cloud-server IPs.
+    # Prices refresh via scheduled checks — see README.
+    return []
 
 
 async def parse_sales(page):

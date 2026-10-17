@@ -3,8 +3,8 @@ from .base import BaseProvider
 from .engine import q
 
 STORE_NAME = "Meijer"
-PROVIDER_STATUS = {"status": "live",
-                   "note": "Live prices from meijer.com search."}
+PROVIDER_STATUS = {"status": "blocked",
+                   "note": "Meijer blocks automated price checks. Ask Muse in chat for a live check."}
 
 SEARCH_URL_TMPL = "https://www.meijer.com/shopping/search/%s"
 
@@ -18,30 +18,9 @@ def sales_url(zip_code):
 
 
 async def parse_results(page, url):
-    rows = await page.evaluate("""() => {
-      const cards = [...document.querySelectorAll('main article')];
-      const out = [];
-      for (const card of cards.slice(0, 10)) {
-        const h3 = card.querySelector('h3');
-        const name = h3 ? h3.innerText.trim().replace(/\\s+/g, ' ') : '';
-        const pel = card.querySelector(
-          '[aria-label="Product pricing information"]');
-        const txt = ((pel ? pel.innerText : '') || card.innerText) || '';
-        const m = txt.match(/\\$(\\d+\\.\\d{2})/);
-        const a = card.querySelector('a[href^="/shopping/product/"]');
-        const href = a ? a.getAttribute('href') : '';
-        if (name && m) {
-          out.push({name: name.slice(0, 120),
-                    price: parseFloat(m[1]),
-                    sale: /Original price:|Save \\$/i.test(txt),
-                    url: href ? 'https://www.meijer.com' + href : null});
-        }
-      }
-      return out;
-    }""")
-    return [{"store": STORE_NAME, "name": r["name"], "price": r["price"],
-             "unit_price": None, "sale": r["sale"], "url": r["url"] or url}
-            for r in rows]
+    # Browser scraping disabled: stores block cloud-server IPs.
+    # Prices refresh via scheduled checks — see README.
+    return []
 
 
 async def parse_sales(page):
