@@ -6,6 +6,8 @@ prices); real integrations get wired into providers/ later. Never invent
 prices: a store with no data shows as such.
 """
 import importlib
+import threading
+import uuid
 from datetime import datetime, timezone
 
 from flask import Flask, jsonify, request, Response
@@ -51,10 +53,113 @@ def utc_now_iso():
 
 
 # ------------------------------------------------------------------ API ---
+# Scrapes are slow (JS-heavy store sites), so searches run as background
+# jobs: POST starts the job and returns a job_id immediately; the frontend
+# polls GET /api/job/<id> until status is "done" or "error".
 
 @app.route("/healthz")
 def healthz():
     return "ok", 200
+
+
+JOBS = {}
+JOBS_LOCK = threading.Lock()
+
+
+def _new_job(kind, label):
+    job_id = uuid.uuid4().hex[:12]
+    with JOBS_LOCK:
+        JOBS[job_id] = {"job_id": job_id, "kind": kind, "label": label,
+                        "status": "pending", "created": utc_now_iso()}
+        # keep memory bounded
+        while len(JOBS) > 50:
+            oldest = min(JOBS, key=lambda k: JOBS[k]["created"])
+            del JOBS[oldest]
+    return job_id
+
+
+def _finish_job(job_id, payload):
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id].update(payload)
+            JOBS[job_id]["status"] = "done"
+
+
+def _fail_job(job_id, error):
+    with JOBS_LOCK:
+        if job_id in JOBS:
+            JOBS[job_id]["status"] = "error"
+            JOBS[job_id]["error"] = str(error)[:200]
+
+
+def _collect(by_store):
+    results = []
+    for mod in PROVIDERS:
+        res, err = by_store.get(mod.STORE_NAME, ([], None))
+        if err:
+            app.logger.warning("provider %s: %s", mod.STORE_NAME, err)
+        results.extend(res)
+    return results
+
+
+def _run_search_job(job_id, item, zip_code):
+    try:
+        by_store = engine.run(engine.search_all(item, zip_code, PROVIDERS))
+        results = _collect(by_store)
+        _finish_job(job_id, {"item": item, "zip": zip_code,
+                             "results": results,
+                             "winner": pick_winner(results),
+                             "statuses": provider_statuses(),
+                             "checked_at": utc_now_iso()})
+    except Exception as e:
+        _fail_job(job_id, e)
+
+
+def _run_list_job(job_id, items, zip_code):
+    try:
+        per_item, totals = [], {}
+        for item in items:
+            by_store = engine.run(engine.search_all(item, zip_code,
+                                                    PROVIDERS))
+            results = _collect(by_store)
+            winner = pick_winner(results)
+            per_item.append({"item": item, "results": results,
+                             "winner": winner})
+            if winner:
+                totals[winner["store"]] = totals.get(winner["store"], 0.0) \
+                    + winner["price"]
+            with JOBS_LOCK:
+                if job_id in JOBS:
+                    JOBS[job_id]["progress"] = \
+                        "%d of %d items" % (len(per_item), len(items))
+        _finish_job(job_id, {"zip": zip_code, "items": per_item,
+                             "totals": totals,
+                             "statuses": provider_statuses(),
+                             "checked_at": utc_now_iso()})
+    except Exception as e:
+        _fail_job(job_id, e)
+
+
+def _run_sales_job(job_id, zip_code):
+    try:
+        by_store = engine.run(engine.sales_all(zip_code, PROVIDERS))
+        sales = {mod.STORE_NAME: by_store.get(mod.STORE_NAME,
+                                              ([], None))[0]
+                 for mod in PROVIDERS}
+        _finish_job(job_id, {"zip": zip_code, "sales": sales,
+                             "statuses": provider_statuses(),
+                             "checked_at": utc_now_iso()})
+    except Exception as e:
+        _fail_job(job_id, e)
+
+
+@app.route("/api/job/<job_id>")
+def api_job(job_id):
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+    if not job:
+        return jsonify({"error": "Unknown job."}), 404
+    return jsonify(dict(job))
 
 
 @app.route("/api/status")
@@ -70,25 +175,10 @@ def api_search():
     zip_code = (data.get("zip") or DEFAULT_ZIP).strip() or DEFAULT_ZIP
     if not item:
         return jsonify({"error": "Type an item to search."}), 400
-    results = []
-    try:
-        by_store = engine.run(engine.search_all(item, zip_code, PROVIDERS))
-        for mod in PROVIDERS:
-            res, err = by_store.get(mod.STORE_NAME, ([], None))
-            if err:
-                app.logger.warning("provider %s search: %s",
-                                   mod.STORE_NAME, err)
-            results.extend(res)
-    except Exception as e:
-        app.logger.warning("search_all failed: %s", e)
-    return jsonify({
-        "item": item,
-        "zip": zip_code,
-        "results": results,
-        "winner": pick_winner(results),
-        "statuses": provider_statuses(),
-        "checked_at": utc_now_iso(),
-    })
+    job_id = _new_job("search", item)
+    threading.Thread(target=_run_search_job, args=(job_id, item, zip_code),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"})
 
 
 @app.route("/api/compare-list", methods=["POST"])
@@ -100,58 +190,24 @@ def api_compare_list():
     if not items:
         return jsonify({"error": "Your list is empty."}), 400
 
-    per_item = []
-    totals = {}
-    for item in items:
-        results = []
-        try:
-            by_store = engine.run(engine.search_all(item, zip_code,
-                                                    PROVIDERS))
-            for mod in PROVIDERS:
-                res, err = by_store.get(mod.STORE_NAME, ([], None))
-                if err:
-                    app.logger.warning("provider %s search: %s",
-                                       mod.STORE_NAME, err)
-                results.extend(res)
-        except Exception as e:
-            app.logger.warning("search_all failed for %r: %s", item, e)
-        winner = pick_winner(results)
-        per_item.append({"item": item, "results": results, "winner": winner})
-        if winner:
-            totals[winner["store"]] = totals.get(winner["store"], 0.0) \
-                + winner["price"]
-
-    return jsonify({
-        "zip": zip_code,
-        "items": per_item,
-        "totals": totals,
-        "statuses": provider_statuses(),
-        "checked_at": utc_now_iso(),
-    })
+    job_id = _new_job("compare-list", "%d items" % len(items))
+    threading.Thread(target=_run_list_job,
+                     args=(job_id, items, zip_code),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"})
 
 
-@app.route("/api/sales")
+@app.route("/api/sales", methods=["GET", "POST"])
 def api_sales():
-    zip_code = (request.args.get("zip") or DEFAULT_ZIP).strip() or DEFAULT_ZIP
-    sales = {}
-    try:
-        by_store = engine.run(engine.sales_all(zip_code, PROVIDERS))
-        for mod in PROVIDERS:
-            res, err = by_store.get(mod.STORE_NAME, ([], None))
-            if err:
-                app.logger.warning("provider %s sales: %s",
-                                   mod.STORE_NAME, err)
-            sales[mod.STORE_NAME] = res
-    except Exception as e:
-        app.logger.warning("sales_all failed: %s", e)
-        for mod in PROVIDERS:
-            sales[mod.STORE_NAME] = []
-    return jsonify({
-        "zip": zip_code,
-        "sales": sales,
-        "statuses": provider_statuses(),
-        "checked_at": utc_now_iso(),
-    })
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+    else:
+        data = request.args
+    zip_code = (data.get("zip") or DEFAULT_ZIP).strip() or DEFAULT_ZIP
+    job_id = _new_job("sales", "weekly sales")
+    threading.Thread(target=_run_sales_job, args=(job_id, zip_code),
+                     daemon=True).start()
+    return jsonify({"job_id": job_id, "status": "pending"})
 
 
 # ------------------------------------------------------------------ UI ----
@@ -335,20 +391,47 @@ async function doSearch() {
   const q = $("q").value.trim();
   if (!q) return;
   const btn = $("searchBtn"); btn.disabled = true;
-  $("searchOut").innerHTML = `<div class="card"><div class="spin">Checking stores&hellip;</div></div>`;
+  $("searchOut").innerHTML = `<div class="card"><div class="spin">Checking stores&hellip; (first check can take ~1 min)</div></div>`;
   try {
     const r = await fetch("/api/search", {method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({item: q, zip: zip()})});
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || "Search failed");
+    const done = await pollJob(j.job_id);
     $("searchOut").innerHTML =
-      `<div class="card"><div class="storename">${esc(j.item)}</div>`
-      + resultRows(j.results, j.winner) + checkedLine(j.checked_at, j.zip) + `</div>`;
+      `<div class="card"><div class="storename">${esc(done.item)}</div>`
+      + resultRows(done.results, done.winner) + checkedLine(done.checked_at, done.zip) + `</div>`;
   } catch (e) {
     $("searchOut").innerHTML = `<div class="err">${esc(e.message)}</div>`;
   }
   btn.disabled = false;
+}
+
+async function pollJob(job_id) {
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const r = await fetch("/api/job/" + job_id);
+    const j = await r.json();
+    if (j.status === "done") return j;
+    if (j.status === "error") throw new Error(j.error || "Check failed");
+  }
+  throw new Error("Timed out waiting for results — try again.");
+}
+
+async function pollJobProgress(job_id) {
+  for (let i = 0; i < 120; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const r = await fetch("/api/job/" + job_id);
+    const j = await r.json();
+    if (j.progress) {
+      const el = $("progHint");
+      if (el) el.textContent = j.progress;
+    }
+    if (j.status === "done") return j;
+    if (j.status === "error") throw new Error(j.error || "Compare failed");
+  }
+  throw new Error("Timed out waiting for results — try again.");
 }
 $("searchBtn").addEventListener("click", doSearch);
 $("q").addEventListener("keydown", e => { if (e.key === "Enter") doSearch(); });
@@ -379,33 +462,34 @@ $("importBtn").addEventListener("click", () => {
 async function compareList() {
   if (!myList.length) { $("listOut").innerHTML = `<div class="err">Add some items first.</div>`; return; }
   const btn = $("compareBtn"); btn.disabled = true;
-  $("listOut").innerHTML = `<div class="card"><div class="spin">Comparing ${myList.length} items across 4 stores&hellip;</div></div>`;
+  $("listOut").innerHTML = `<div class="card"><div class="spin">Comparing ${myList.length} items across 4 stores&hellip;<div class="hint" id="progHint"></div></div></div>`;
   try {
     const r = await fetch("/api/compare-list", {method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({items: myList, zip: zip()})});
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || "Compare failed");
+    const done = await pollJobProgress(j.job_id);
     let h = "";
-    for (const it of j.items) {
+    for (const it of done.items) {
       h += `<div class="card"><div class="storename">${esc(it.item)}`
         + (it.winner ? ` <span class="badge win">${esc(it.winner.store)} ${money(it.winner.price)}</span>` : "") + `</div>`
         + resultRows(it.results, it.winner) + `</div>`;
     }
-    const stores = Object.keys(j.totals);
+    const stores = Object.keys(done.totals);
     if (stores.length) {
-      const best = stores.reduce((a, b) => j.totals[a] <= j.totals[b] ? a : b);
+      const best = stores.reduce((a, b) => done.totals[a] <= done.totals[b] ? a : b);
       h += `<div class="card"><div class="storename">Estimated basket totals</div>`
         + `<table class="totals"><tr><th>Store</th><th>Winner items</th></tr>`
-        + stores.sort((a, b) => j.totals[a] - j.totals[b]).map(s =>
+        + stores.sort((a, b) => done.totals[a] - done.totals[b]).map(s =>
             `<tr class="${s === best ? "winner" : ""}"><td><b>${esc(s)}</b>`
             + (s === best ? ' <span class="badge win">cheapest basket</span>' : "")
-            + `</td><td>${money(j.totals[s])}</td></tr>`).join("")
+            + `</td><td>${money(done.totals[s])}</td></tr>`).join("")
         + `</table><div class="hint">Totals add up each item's cheapest price at that store. Items with no price found are skipped.</div></div>`;
     } else {
       h += `<div class="card"><div class="empty">No prices found for any item yet &mdash; provider integrations are still being connected.</div></div>`;
     }
-    h += checkedLine(j.checked_at, j.zip);
+    h += checkedLine(done.checked_at, done.zip);
     $("listOut").innerHTML = h;
   } catch (e) {
     $("listOut").innerHTML = `<div class="err">${esc(e.message)}</div>`;
@@ -418,10 +502,13 @@ $("compareBtn").addEventListener("click", compareList);
 async function loadSales() {
   $("salesOut").innerHTML = `<div class="spin">Loading this week's sales&hellip;</div>`;
   try {
-    const r = await fetch("/api/sales?zip=" + encodeURIComponent(zip()));
+    const r = await fetch("/api/sales", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({zip: zip()})});
     const j = await r.json();
+    const done = await pollJob(j.job_id);
     let h = "";
-    for (const [store, items] of Object.entries(j.sales)) {
+    for (const [store, items] of Object.entries(done.sales)) {
       h += `<div class="card"><div class="storename">${esc(store)}${statusBadge(store)}</div>`;
       if (!items.length) {
         h += `<div class="empty">No sale data yet &mdash; this provider is still being connected.</div>`;
@@ -433,7 +520,7 @@ async function loadSales() {
       }
       h += `</div>`;
     }
-    h += checkedLine(j.checked_at, j.zip);
+    h += checkedLine(done.checked_at, done.zip);
     $("salesOut").innerHTML = h;
   } catch (e) {
     $("salesOut").innerHTML = `<div class="err">${esc(e.message)}</div>`;

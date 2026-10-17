@@ -11,6 +11,7 @@ import asyncio
 import json
 import os
 import sqlite3
+import threading
 import time
 from urllib.parse import quote_plus
 
@@ -170,8 +171,28 @@ async def sales_all(zip_code, providers):
 
 
 def run(coro):
-    """Sync entry point for Flask routes."""
-    return asyncio.run(coro)
+    """Sync entry point. All Playwright work runs on one dedicated
+    thread/event-loop so the browser singleton stays loop-bound."""
+    loop = _ensure_loop()
+    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+    return fut.result(timeout=600)
+
+
+_loop = None
+
+
+def _ensure_loop():
+    global _loop
+    if _loop is None:
+        _loop = asyncio.new_event_loop()
+
+        def runner():
+            asyncio.set_event_loop(_loop)
+            _loop.run_forever()
+
+        t = threading.Thread(target=runner, daemon=True)
+        t.start()
+    return _loop
 
 
 def q(s):
