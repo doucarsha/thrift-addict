@@ -73,6 +73,10 @@ def api_debug():
                     info[k.strip()] = v.strip()
     except Exception as e:
         info["mem_error"] = str(e)
+    import os as _os
+    info["https_proxy_set"] = bool(_os.environ.get("HTTPS_PROXY")
+                                   or _os.environ.get("https_proxy"))
+    info["grocery_proxy_set"] = bool(_os.environ.get("GROCERY_PROXY"))
     try:
         from providers import engine as _eng
         info["browser_started"] = _eng._browser is not None

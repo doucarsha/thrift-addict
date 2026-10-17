@@ -32,7 +32,9 @@ _sem = None
 
 
 def _proxy_cfg():
-    raw = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+    # Explicit opt-in only. Never auto-read HTTPS_PROXY: PaaS platforms
+    # sometimes set proxy vars that break Playwright's CONNECT tunneling.
+    raw = os.environ.get("GROCERY_PROXY")
     return {"server": raw} if raw else None
 
 
@@ -42,11 +44,9 @@ async def _ensure():
         _pw = await async_playwright().start()
         kwargs = {"headless": True,
                   "args": ["--disable-dev-shm-usage", "--no-sandbox",
-                           "--disable-gpu", "--no-zygote", "--single-process",
+                           "--disable-gpu", "--no-zygote",
                            "--disable-extensions",
-                           "--disable-background-networking",
-                           "--disable-background-timer-throttling",
-                           "--disable-renderer-backgrounding"]}
+                           "--disable-background-networking"]}
         proxy = _proxy_cfg()
         if proxy:
             kwargs["proxy"] = proxy
